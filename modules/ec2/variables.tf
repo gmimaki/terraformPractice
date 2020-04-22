@@ -1,7 +1,6 @@
 variable "name" {
     description = "インスタンス名"
     type = string
-    default = "HelloWorld"
 }
 
 variable "instance_type" {
