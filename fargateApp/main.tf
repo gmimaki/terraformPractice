@@ -350,3 +350,77 @@ resource "aws_acm_certificate_validation" "example" {
     certificate_arn = aws_acm_certificate.example.arn
     validation_record_fqdns = [aws_route53_record.example_certificate.fqdn]
 }
+
+# ALBのHTTPSリスナー
+resource "aws_lb_listener" "https" {
+    load_balancer_arn = aws_lb.example.arn
+    port = "443"
+    protocol = "HTTPS"
+    certificate_arn = aws_acm_certificate.example.arn
+    ssl_policy - "ELBSecurityPolicy-2016-08" # AWSで推奨されているSecurtyPolicy
+
+    default_action {
+        type = "fixed_response"
+
+        fixed_response {
+            content_type = "text/plain"
+            message_body = "これは「HTTPS」です"
+            status_code = "200"
+        }
+    }
+}
+
+resource "aws_lb_listener" "redirect_http_to_https" {
+    load_balancer_arn = aws_lb.example.arn
+    port = "8080"
+    protocol = "HTTP"
+
+    default_action {
+        type = "redirect"
+
+        redirect {
+            port = "443"
+            protocol = "HTTPS"
+            status_code = "HTTP_301"
+        }
+    }
+}
+
+# ターゲットグループとECSの紐付け
+resource "aws_lb_target_group" "example" {
+    name = "example"
+    target_type = "ip" # EC2の場合はEC2指定 Fargateの場合はIPアドレス指定 Lambda関数指定も可能
+    vpc_id = aws_vpc.example.id # ターゲットタイプでIPアドレスを指定した場合はvpc_id, port, protocolを設定する必要
+    port = 80
+    protocol = "HTTP" # HTTPSの終端はALBで行うため、protocolにはHTTPを指定することが多い
+    deregistration_delay = 300 # ターゲットの登録を解除する前にALBが待機する時間
+
+    health_check {
+        path = "/"
+        healthy_threshold = 5
+        unhealthy_threshold = 2
+        timeout = 5
+        internal = 30
+        matcher = 200
+        port = "traffic-port"
+        protocol = "HTTP"
+    }
+
+    depends_on = [aws_lb.example] # 依存関係制御
+}
+
+# リスナールール
+resource "aws_lb_listener_rule" "example" {
+    listener_arn = aws_lb_listener.https.arn
+    priority = 100 # 数字が小さいほど優先順位が高い
+
+    action {
+        type = "forward"
+        target_group_arn = aws_lb_target_group.example.arn
+    }
+
+    condition {
+        field = "path-pattern"
+        values = ["/*"]
+    }
+}
