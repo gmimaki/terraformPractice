@@ -230,7 +230,6 @@ data "aws_iam_policy_document" "alb_log" {
     }
 }
 
-
 ################### ALB
 resource "aws_lb" "example" {
     name = "example"
@@ -298,4 +297,56 @@ resource "aws_lb_listener" "http" {
             status_code = "200"
         }
     }
+}
+
+# ドメインはあらかじめroute53で手動で登録しておく
+data "aws_route53_zone" "example" {
+    name = "mimaki.com"
+}
+
+resource "aws_route53_zone" "test_example" {
+    name = "test.mimaki.com"
+}
+
+# ALBとの紐付け
+resource "aws_route53_record" "example" {
+    zone_id = data.aws_route53_zone.example.zone_id
+    name = data.aws_route53_zone.example.name
+    type = "A" # AWS独自のALIASレコードもtype Aで指定する albだけでなくS3, CloudFrontの紐付けも可能
+
+    alias {
+        name = aws_lb.example.dns_name
+        zone_id = aws_lb.example.zone_id
+        evaluate_target_health = true
+    }
+}
+
+output "domain_name" {
+    value = aws_route53_record.example.name
+}
+
+# 証明書
+resource "aws_acm_certificate" "example" {
+    domain_name = aws_route53_record.example.name
+    subjective_alternative_names = [] # ドメイン名追加
+    validation_method = "DNS" # ドメインの所有権の検証方法 DNS検証orEメール検証 自動更新したい場合はDNS検証を選択
+
+    lifecycle {
+        create_before_destroy = true # リソースを作成してからリソースを削除する形の置き換え
+    }
+}
+
+# 検証用DNSレコード
+resource "aws_route53_record" "example_certificate" {
+    name = aws_acm_certificate.example.domain_validation_options[0].resource_record_name
+    type = aws_acm_certificate.example.domain_validation_options[0].resource_record_type
+    records = [aws_acm_certificate.example.domain_validation_options[0].resource_record_value]
+    zone_id = data.aws_route53_zone.example.id
+    ttl = 60
+}
+
+# 検証の待機 SSL証明書の検証が完了するまで待つ
+resource "aws_acm_certificate_validation" "example" {
+    certificate_arn = aws_acm_certificate.example.arn
+    validation_record_fqdns = [aws_route53_record.example_certificate.fqdn]
 }
