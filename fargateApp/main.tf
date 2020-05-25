@@ -553,3 +553,104 @@ resource "aws_cloudwatch_event_target" "example_batch" {
         }
     }
 }
+
+resource "aws_kms_key" "example" {
+    description = "Example Customer Master Key"
+    enable_key_rotation = true # 1年に一度ローテーション
+    is_enabled = true
+    deletion_window_in_days = 30
+}
+
+resource "aws_kms_alias" "example" {
+    name = "alias/example"
+    target_key_id = aws_kms_key.example.key_id
+}
+
+resource "aws_ssm_parameter" "db_username" {
+    name = "/db/username"
+    value = "root"
+    type = "String"
+    description = "DBのユーザー名"
+}
+
+# ソースコード上にパスワードを載せるのはまずいのであとでAWS CLIから更新する
+resource "aws_ssm_parameter" "db_raw_password" {
+    name = "/db/password"
+    value = "uninitialized"
+    type = "SecureString"
+    description = "DBのパスワード"
+
+    lifecycle {
+        ignore_changes = [value]
+    }
+}
+
+resource "aws_db_parameter_group" "example" {
+    name = "example"
+    family = "mysql5.7"
+
+    parameter {
+        name = "character_set_database"
+        value = "utf8mb4"
+    }
+
+    parameter {
+        name = "character_set_server"
+        value = "utf8mb4"
+    }
+}
+
+resource "aws_db_option_group" "example" {
+    name = "example"
+    engine_name = "mysql"
+    major_engine_version = "5.7"
+
+    option {
+        option_name = "MARIADB_AUDIT_PLUGIN"
+    }
+}
+
+resource "aws_db_subnet_group" "example" {
+    name = "example"
+    subnet_ids = [aws_subnet.private_0.id, aws_subnet.private_1.id] # マルチAZ設定のため異なるAZの設定をする
+}
+
+resource "aws_db_instance" "example" {
+    identifier = "example"
+    engine = "mysql"
+    engine_version = "5.7.25"
+    instance_class = "db.t3.small"
+    allocated_storage = 20
+    max_allocated_storage = 100
+    storage_type = "gp2" # 汎用SSD or プロビジョンドIOPSを指定 gp2は汎用SSD
+    storage_encrypted = true
+    kms_key_id = aws_kms_key.example.arn
+    username = "admin"
+    password = "VeryStrongPassword" # パスワードは必須項目で省略できないので、aws rds modify-db-instance コマンドで更新する
+    multi_az = true
+    publicly_accessible = false
+    backup_window = "09:10-09:40" # UTC
+    backup_retention_period = 30
+    maintenance_window = "mon:10:10-mon:10:40" # RDSでは定期的にメンテナンスが行われる UTC
+    auto_minor_version_upgrade = false
+    deletion_protection = true # 削除保護
+    skip_final_snapshot = false
+    port = 3306
+    apply_immediately = false
+    vpc_security_group_ids = [module.mysql_sg.security_group_id]
+    parameter_group_name = aws_db_parameter_group.example.name
+    option_group_name = aws_db_option_group.example.arn
+    db_subnet_group_name = aws_db_option_group.example.name
+
+    lifecycle {
+        ignore_changes = [password]
+    }
+}
+
+module "mysql_dg" {
+    source = "./security_group"
+    name = "mysql-sg"
+    vpc_id = aws_vpc.example.id
+    port = 3306
+    cidr_blocks = [aws_vpc.example.cidr_block]
+}
